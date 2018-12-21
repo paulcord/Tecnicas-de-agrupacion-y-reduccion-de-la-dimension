@@ -1,0 +1,364 @@
+---
+title: "Tarea Nº 3 Los coches del jefe 3"
+author: "Paúl Córdova"
+date: "18 de diciembre de 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, include=FALSE}
+setwd("C:/Users/Edwin/Desktop/CUNEF/Master Data Science/Tecnicas de Agrupacion y reduccion de la dimension/2. Tecnicas de agrupacion/1. Analisis Cluster/Tarea Los coches del jefe")
+
+# Install packages - Read SAV files (SPSS)
+library(foreign)
+# Load database
+df <- read.spss('tterreno.sav', to.data.frame = TRUE)
+head(df, 2)
+str(df)
+
+# Exploratory analysis summary
+summary(df)
+dim(df)
+
+# Explore NA values
+ExploreNA <- function(data) {
+  TrueNA <- is.na.data.frame(data)
+  SumNA <- colSums(TrueNA)
+  PorcentNA <- colSums(TrueNA) / nrow(data)*100
+  VariableNA <- data.frame(SumNA, PorcentNA)
+  
+  return(VariableNA)
+} 
+ExploreNA(df)
+
+# Libreria para analisis estadistico
+library(tidyverse)
+
+# Exploratory Data Analysis (NA values)
+
+# Identify missing values in variable peso and change it by its similar
+subset(df, is.na(peso))
+subset(df, marca == "FORD")
+df$peso <- replace_na(df$peso, 1850)
+
+# Correlation between consumption variables
+cor(na.omit(df[10:12])) # More correlation between cons90 and the remaining consumption variables
+
+# Keep only one consumption variable (cons90)
+df$cons120 <- NULL
+df$consurb <- NULL
+
+# Identify missing values in variable cons90 and change it by its similar
+subset(df, is.na(cons90))
+
+# Replace NA cons90 by brand means
+df %>% 
+  group_by(marca) %>%
+  summarise(mean = mean(cons90, na.rm = T))
+
+df$cons90 = if_else(df$marca %in% c("NISSAN") & is.na(df$cons90),  8.4, df$cons90)
+
+df$cons90 = if_else(df$marca %in% c("SSANGYONG") & is.na(df$cons90),  8.17, 
+                    df$cons90)
+
+# Replace NA cons90 by seat means
+df %>% 
+  group_by(plazas) %>%
+  summarise(mean = mean(cons90, na.rm = T))
+
+# We use the mean of seven seats
+df$cons90 = if_else(df$marca %in% c("UAZ") & is.na(df$cons90),  9.24, df$cons90)
+
+# Identify missing values in "velocidad" variable
+subset(df, is.na(velocida))
+
+# Replace NA velocida by brand means
+df %>% 
+  group_by(marca) %>%
+  summarise(mean = mean(velocida, na.rm = T))
+
+df$velocida = if_else(df$marca %in% c("SUZUKI") & is.na(df$velocida),  142,
+                      df$velocida)
+
+df$velocida = if_else(df$marca %in% c("TATA") & is.na(df$velocida),  135,
+                      df$velocida)
+
+# Finally eliminate the less important variables consider business knowledge
+df$plazas   <- NULL
+df$acelerac <- NULL
+df$acel2    <- NULL
+
+# Check there isn´t NA values
+ExploreNA(df)
+
+# Combine brand and model
+df$BrandModel <- paste(df$marca,"-",df$modelo)
+df[,c(1,2)] = NULL
+
+# Use BrandModel as index
+row.names(df) <- make.names(df$BrandModel, unique = T)
+df[,9] <- NULL
+
+# Transform cylindres to numeric variable
+FactorToNumeric <- function(factorvariable) {
+  as_char <- as.character(factorvariable)
+  as_num  <- as.numeric(as_char)
+  return(as_num)
+}
+df['cilindro'] <- FactorToNumeric(df$cilindro)
+```
+
+## Resumen Ejecutivo
+
+El presente informe tiene por objetivo clasificar de forma homogénea a vehículos todo terreno (4x4) clásicos para su posterior asignación a diez residencias. Para ello, se aplicó la técnica de clusterización "kmeans" en base a información técnica de los automotóres; la cual determinó como número óptimo de tres grupos. En base al número de clusters se establecieron tres agrupaciones territoriales de acuerdo a la posición geográfica y la pertenencia a un estado-nación. Por último, con la finaldad de generar un relacionamiento entre los vehículos y los territorios se asociaron las características medias de los todo terreno con el PIB per cápita de cada país. Siendo asociados aquellos vehículos de mayor precio y mayor equipamiento con una mayor riqueza nacional (Grupo 1 - Suiza), los vehículos de precio y equipamiento medio fueron relacionados con una riqueza nacional media (Grupo 2- Francia) y aquellos automotóres que ostentaron un precio menor al resto y un menor equipamiento fueron ligados a una inferior renta per cápita (Grupo 3 - Italia).   
+
+## Introducción
+
+Como preámbulo se tiene que el coleccionista ostenta 125 vehículos todo terreno (TT) y posee información relevante de cada uno de ellos. Además, se precisa el requerimiento de agrupar a los vehículos para su posterior distribución en las propiedades correspondiente. Dado el requerimiento de establecer una determinada división de los vehículos, este trabajo busca emplear la forma más eficiente y consistente para dicha agrupación.
+
+Entre los principales aspectos a destacar en la información concerniente a los vehículos 4x4 se encuentran: precio de venta al público, número de cilindros, número de centímetros cúbicos, potencia del motor (CV), revoluciones por minuto, el peso del vehículo, el consumo de combustible a 90 km/h y la velocidad máxima. Además de ello, cabe tener en cuenta que los vehículos 4x4 cuentan con una serie de características que se enumeran a continuación: durabilidad, resistencia y poseen una mayor fuerza de torque para superar trayectos difíciles (aspecto relacionado a su uso original).
+
+Mientras que no se tomaron en consideración las siguientes variables: el número de asientos (por considerarse limitada en la segmentación de los todo terreno); el consumo de 120 km/h y el consumo urbano (debido a su alta relación con el consumo a 90 km/h); la aceleración y el tiempo de aceleración (porque en estos vehículos se privilegia la potencia sobre la velocidad).
+
+## Desarrollo
+
+```{r, include=FALSE}
+# Exploratory analysis
+summary(df)
+
+# Save original dataframe
+df1 <- df
+```
+
+En un inicio, al examinar las variables relevantes se destaca que en los vehículos todo terreno el precio de venta al público medio fue de 3.730.000 pesetas, el número de cilindros mínimo fue de 4 y el máximo de 8, la media en centímetros cúbicos tendió a los 2.570, la potencia media se encontró entre 117.1 caballos de vapor y las revoluciones por minuto oscilaron entre los 3600 y 6500. A su vez, el peso mínimo de los vehículos fue de 930 kilogramos y el máximo fue de 2320 kilogramos. Por su parte, el consumo a 90 km/h fue de 8.882 y la velocidad máxima en promedio de estos vehículos fue de 150 km/h. Esta aproximación nos permite identificar que las variables se encuentran en diversas escalas, por lo cual se estandarizaron los datos para tener una homogeneidad en las medidas y poder realizar el método de agrupación. 
+
+
+```{r, include=FALSE}
+# Clusterization
+library(factoextra)
+library(cluster)
+
+# Scale variables
+df <- scale(df)
+
+# Assets distance (person method)
+df.dist = get_dist(df, stand = TRUE, method = "pearson") 
+
+fviz_dist(df.dist, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"), lab_size = 5) #We observe 3 to 4 clusters
+
+# Assets euclidean distance
+dist.eucl = dist(df, method = "euclidean", upper = F)
+dist.eucl
+
+# Dendogram visualization
+plot(hclust(dist.eucl, method = "ward.D2"), cex = 0.7, main = "Dendrogram", ylab = "Anchura", xlab = "Cluster analysis-Ward matriz with euclidean distance", cex = 0.5)
+```
+
+
+```{r, include=FALSE}
+# Exploratory cluster analysis
+df.eclust = eclust(df, FUNcluster = "kmeans", stand = TRUE, hc_metric = "euclidean",
+                   nstart = 25, nboot = 50, graph = FALSE)
+# Optimal clusterization
+df.eclust$nbclust # The solution was only one cluster, we tried other option
+
+# Hicherical clusterization
+df.eclust.hi = eclust(df, "hclust", k = 3) # Choose 3 groups
+fviz_dend(df.eclust.hi, rect = TRUE, cex = 0.6) # dendrogram with 3 groups
+
+fviz_silhouette(df.eclust.hi) # silueta
+
+fviz_cluster(df.eclust.hi, pointsize = 2, labelsize = 8, repel = TRUE) # scatterplot
+
+```
+
+
+```{r, include=FALSE}
+# Assessing Clustering Tendency 
+require(clustertend)
+
+set.seed(123)
+bondad_ac = get_clust_tendency(df, n = nrow(df) - 1)
+
+# Hopkins statistic:  (if is close to zero we can apply segmentation)
+bondad_ac$hopkins_stat # we continue with segmentation process
+
+# Analysis library factoextra (cluster size)
+fviz_nbclust(df, kmeans, method = "wss") +
+        geom_vline(xintercept = 4, linetype = 2) +
+        geom_vline(xintercept = 5, linetype = 3) +
+        ggtitle("Optimal cluster number - k medias") +
+        labs(x = "Number of clusters", y = "TSS within groups")  
+
+fviz_nbclust(df,  hcut, method = "wss") +
+        geom_vline(xintercept = 3, linetype = 2) +
+        ggtitle("Optimal cluster number -  hicherical") +
+        labs(x = "Number of clusters", y = "TSS within groups")
+
+# Before visualization both graphs we suggest 3 or 4 clusters
+
+## Assets optimal number of clusters with NBClust
+library("NbClust")
+
+set.seed(123)
+
+nb.all = NbClust(df, distance = "euclidean", min.nc = 2,
+                   max.nc = 10, method = "complete", index = "all")
+nb.all$Best.nc
+
+# According to the majority rule, the best number of clusters is  3
+fviz_nbclust(nb.all) + theme_minimal() +
+        labs(x = "Number of clusters", y = "Frecuency")
+```
+
+Posterior al proceso de selección del número óptimo de grupos mediante diversas metodologías, en base a la información correspondiente se eligió agrupar a los vehículos todo terreno en 3 clusters o agrupaciones. Además, cabe destacar el nulo solapamiento entre los grupos y la semejanza en las dimensiones de cada clúster (Ilustracón 1).
+
+```{r, include=TRUE}
+# WE CHOOSE 3 CLUSTER AFTER ANALYTICAL ANALYSIS:
+
+# Euclidean clustering
+dfeuclidean <- eclust(x = df, FUNcluster = 'kmeans', stand = T, k = 3, 
+                      hc_metric = 'euclidean', seed = 7, nstart = 25,
+                      graph = FALSE)
+
+# Visualizate graph
+fviz_cluster(dfeuclidean, pointsize = 2, labelsize = 8, repel = TRUE) 
+
+# Detail clusterization groups
+# table(dfeuclidean$cluster)
+
+```
+
+En la Tabla 1, se denota que el Grupo 1 ostentó la menor cantidad de automóviles todo terreno (25 vehículos); por su parte, el Grupos 3 albergó 32 vehículos de similares características; no obstante, el Grupo 3 acumuló la mayor cantidad de automóviles con un total de 68 vehículos.
+
+: Tabla de agrupación de los vehículos 4x4 (kmeans)
+
+| Clúster - Agrupación | Número de grupos |
+|:--------------------:|:----------------:|
+|        Grupo 1       |        25        |
+|        Grupo 2       |        68        |
+|        Grupo 3       |        32        |
+
+
+```{r, include = FALSE}
+# Get the scaled centers of each group after kmeans
+centers <- as.data.frame(dfeuclidean$centers)
+
+# Unstandarize the centers - Formula: (output  * sd) + mean
+centers$pvp      <- as.matrix(centers$pvp) %*% sd(df1$pvp) + mean(df1$pvp)
+centers$cilindro <- round(as.matrix(centers$cilindro) %*% sd(df1$cilindro) + mean(df1$cilindro))
+centers$cc       <- as.matrix(centers$cc) %*% sd(df1$cc) + mean(df1$cc)
+centers$potencia <- as.matrix(centers$potencia) %*% sd(df1$potencia) + mean(df1$potencia)
+centers$rpm      <- as.matrix(centers$rpm) %*% sd(df1$rpm) + mean(df1$rpm)
+centers$peso     <- as.matrix(centers$peso) %*% sd(df1$peso) + mean(df1$peso)
+centers$cons90   <- as.matrix(centers$cons90) %*% sd(df1$cons90) + mean(df1$cons90)
+centers$velocida <- as.matrix(centers$velocida) %*% sd(df1$velocida) + mean(df1$velocida)
+
+# Observe values after de-standarize centroids by group
+centers
+```
+
+Ante el requerimiento de dividir la colección en diversos grupos es preciso tomar en consideración las siguientes directrices: los vehículos se deben distribuir entre las 10 propiedades existentes, cada residencia puede alojar máximo 15 automóviles y el criterio de distribución debe ser conforme a las características de los vehículos y de las respectivas ubicaciones.
+
+Para ello, en un incio se describen las características medias bajo las cuales fueron agrupados los vehículos (ver Tabla 2). El primer grupo destacó un precio superior, al menos un 50% elevado comparado con el resto de grupos, posee 6 cilindros, mayor número de centímetros cúbicos y potencia, menor cantidad de revoluciones por minuto (a comparación del grupo 3), elevado consumo de combustible en 90 km/h y una velocidad máxima superior a comparación de los otros grupos. Por su parte, el segundo grupo se distingue por tener valores medios a comparación del grupo 1 y grupo 3. Mientras que, el tercer grupo mantuvo los menores valores en cada indicador, exceptuando las variables de número de cilindros, revoluciones por minuto y velocidad máxima.
+
+: : Tabla de caracteríticas medias por clusters
+
+|     |    PVP    | CILINDRO |    CC   | POTENCIA |   RPM   |   PESO  | CONSUMO90 | VELOCIDAD |
+|:---:|:---------:|:--------:|:-------:|:--------:|:-------:|:-------:|:---------:|:---------:|
+|  G1 | 6.747.792 |     6    | 3528.36 |  178.32  | 4746.40 | 1958.04 |   10.64   |   172.56  |
+|  G2 | 3.757.070 |     4    | 2587.58 |  105.88  | 4282.35 | 1794.05 |    8.60   |   144.50  |
+|  G3 | 2.386.929 |     4    | 1783.18 |   93.03  | 5437.50 | 1210.03 |    8.08   |   145.34  |
+
+
+Dado que la clasificación de los vehículos se dispuso en tres grupos, a continuación se procede a identificar tres categorías bajo las cuales se pueda realizar una distribución logística en base a las propiedades. Ante ello, se propone la siguiente segmentación de las viviendas por concepto de cercanía territorial y por pertenencia a un mismo país: 
+
+- Territorio 1: Casa 1, Casa 2, Casa 3, Casa 5, Casa 8 y Casa 9
+- Territorio 2: Casa 6 y Casa 7
+- Territorio 3: Casa 4 y Casa 10 
+
+Donde el Territorio 1 corresponde al territorio de Francia, el Terrritorio 2 corresponde al territorio de Suiza y el Territorio 3 al territorio de Italia (cabe destacar que aunque la propiedad en la isla de Córcega pertenece a Francia por su cercaía territorial se la agrupa en Italia). 
+
+Por consiguiente, al evidenciar las características de cada grupo de acuerdo a las variables, se destacó el precio como un atributo diferenciador entre clusters. En este sentido, se buscó un indicador a nivel de países que figure como un símil de riqueza como lo es el precio en los vehículos; ante ello, se optó por emplear el PIB per cápita de los países dado que refleja el nivel de riqueza por persona de los países. Al analizar los datos del PIB per cápita a nivel nacional para el año 2017, se ostentó la siguiente información (Datos Expansión, 2017): 
+
+- Suiza acumuló 70.893 euros per cápita (Territorio 2)
+- Francia ostentó 34.200 euros per cápita (Territorio 1)
+- Italia alcanzó 28.500 euros per cápita (Territorio 3)
+
+Finalmente, se procede al relacionamiento entre clusters de vehículos y territorios de acuerdo a sus caracteríticas. En este sentido, se emparejó el Grupo 1 (mayor precio y mayor equipamiento) con el Territorio 2 (mayor riqueza nacional); por su parte, al Grupo 2 (precio y equipamiento medio) se lo emparejó con el Territorio 1 (riqueza nacional media); por último, al Grupo 3 (memor precio y escaso equipamiento) se lo emparejó con el Terriorio 3 (menor riqueza nacional).
+
+: Tabla de distribución de los vehículos por territorios
+
+|         | Territorio | Nº casas | Nº plazas (A) | Nº vehículos (B) | Diferencia (A-B) |
+|:-------:|:----------:|:--------:|:-------------:|:----------------:|:----------------:|
+| Grupo 1 |    Suiza   |     2    |       30      |        25        |         5        |
+| Grupo 2 |   Francia  |     6    |       90      |        68        |        22        |
+| Grupo 3 |   Italia   |     2    |       30      |        32        |        -2        |
+
+Al analizar los resultados presentados en la Tabla Nº 3, se destacó que el emparejamiento del Grupo 1 con el Territorio de Suiza deja como resultado 5 plazas sobrantes. Al Grupo 2 se lo emparejó con Francia, dejando como diferencia 22 plazas sobrantes y el Grupo 3 fue emparejado con Italia albergando como resultado un exceso por dos vehículos en la capacidad. Ante ello, la solución más sencilla y eficiente es pasar dos vehículos del Grupo 3 al Grupo 2; dada su mayor disponibilidad de almacenamiento.
+
+A partir de las clasificaciones previstas se determina la siguiente distribución de los vehículos 4x4 (detalle de cada vehículo y su ubucación en el Anexo 1): 
+
+Terriorio Suiza:
+En Colombier (casa 6) se ubican 13 vehículos (Grupo 1) y en Montenol (casa 7) se colocan 12 vehículos (Grupo 1).
+
+Territorio Francia:
+En Vence (casa 3) se ubican 11 vehículos (Grupo 2), en Saint-Raphaël (casa 5) se colocan 11 vehículos (Grupo 2), en la residencia de Le Perreux-sur-Marne (casa 1) se ubican 11 vehículos (Grupo 2), en Bougival (casa 2) se colocan de 11 vehículos (Grupo 2), en la residencia de Yves (casa 8) se ubican 11 vehículos (Grupo 2) y en la residencia de Mérens-les-Vals (casa 9) se colocan 13 vehículos (Grupo 2) y 2 vehículos (Grupo 3).
+
+Territorio Italia
+En Sanremo (casa 10) se ubican 15 vehículos (Grupo 3) y en la residencia de Palasca (casa 4) se colocan 15 vehículos (Grupo 3).
+
+## Conclusiones
+
+- Para la agrupación de las observaciones se consideraron como variables fundamentales: precio de venta al público, número de cilindros, número de centímetros cúbicos, potencia del motor (CV), revoluciones por minuto, el peso del vehículo, el consumo de combustible a 90 km/h y la velocidad máxima; debiendose su consideración a las caractéristicas primordiales y uso de este tipo de vehículos todo terreno.
+- La técnica de agrupación "kmeans" otorgó una adecuada aproximación para la segmentación de los vehículos, siendo tres grupos el óptimo número de clusters: 25 vehículos (grupo 1), 68 vehículos (grupo 2) y 32 vehículos (grupo 3). 
+- Para la agrupación de las propiedades se consideró la posición geográfica y la pertenencia a determinados terriorios; por ello, se conformó el Territorio 1 (Francia), Territorio 2 (Suiza), Territorio 3 (Italia).
+- La disposición logística de los vehículos todo terreno en cada uno de los territorios se realizó en base a la asociación del precio de los automotóres con el PIB per cápita de cada país. Asociando aquellos vehículos de mayor precio y mayor equipamiento a una mayor riqueza nacional (Grupo 1 - Suiza), los vehículos de precio y equipamiento medio con una riqueza nacional media (Grupo 2- Francia) y aquellos automotóres que ostentaron un precio inferior al resto y un menor equipamiento relacionados con un PIB per cápita inferior (Grupo 3 - Italia).
+
+
+## Bibliografía y Recursos digitales
+
+1. Notas técnicas. (octubre 2018). *El análisis cluster*. Profesor: Juan Manuel López Zafra. CUNEF-Máster en Data Science para Finanzas.
+2. R Program y RStudio Version 1.1.456 – © 2009-2018 RStudio, Inc.
+3. Datos Expansión. Producto Interno Bruto (PIB per cápita). Recuperado de: https://datosmacro.expansion.com/pib
+
+## Anexos
+
+```{r}
+# Logistic Distribution Table
+distribucion <- as.data.frame(dfeuclidean$cluster)
+colnames(distribucion) [1] <- "Grupo"
+distribucion$Vehiculo <- row.names.data.frame(distribucion)
+row.names(distribucion) <- 1:125
+
+distribucion <- distribucion %>%
+  dplyr::arrange(Grupo)
+
+# Match with territory
+# distribucion$Territorio <- ""
+# distribucion$Territorio[1:25] <- "Suiza"
+# distribucion$Territorio[26:93] <- "Francia"
+# distribucion$Territorio[94:125] <- "Italia"
+
+# Match with houses
+distribucion$Vivienda <- ""
+distribucion$Vivienda[1:13] <- "Colombier"
+distribucion$Vivienda[14:25] <- "Montenol"
+
+distribucion$Vivienda[26:36] <- "Vence"
+distribucion$Vivienda[37:47] <- "Saint-Raphaël"
+distribucion$Vivienda[48:58] <- "Le Perreux-sur-Marne"
+distribucion$Vivienda[59:69] <- "Bougival"
+distribucion$Vivienda[70:80] <- "Yves"
+distribucion$Vivienda[81:93] <- "Mérens-les-Vals"
+distribucion$Vivienda[94:95] <- "Mérens-les-Vals" #Two vehicles from group number 3
+
+distribucion$Vivienda[96:110] <- "Sanremo"
+distribucion$Vivienda[111:125] <- "Palasca"
+
+distribucion
+```
+
